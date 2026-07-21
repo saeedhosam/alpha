@@ -1,0 +1,12 @@
+[package]
+name = "alpha"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+chromiumoxide = "0.9.1"
+futures = "0.3.33"
+futures-util = "0.3.33"
+reqwest = { version = "0.13.4", features = ["json"] }
+serde = "1.0.229"
+tokio = "1.53.0"
