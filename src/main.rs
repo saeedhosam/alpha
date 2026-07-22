@@ -3,6 +3,8 @@ use std::fs;
 use std::path::Path;
 use std::time::Duration;
 
+use arboard::Clipboard;
+
 use chromiumoxide::Browser;
 use futures::StreamExt;
 use serde::Deserialize;
@@ -180,12 +182,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let dir = Path::new("tickets");
     fs::create_dir_all(dir)?;
     let filepath = dir.join(format!("{}.csv", date));
-    fs::write(&filepath, csv_lines.join("\n"))?;
+    let csv_content = csv_lines.join("\n");
+    fs::write(&filepath, &csv_content)?;
 
     println!(
         "Written {} ticket(s) to {}",
         csv_lines.len(),
         filepath.display()
     );
+
+    if let Ok(mut clip) = Clipboard::new() {
+        let _ = clip.set_text(csv_content);
+        println!("Copied to clipboard");
+    }
+
     Ok(())
 }
