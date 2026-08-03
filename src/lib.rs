@@ -197,7 +197,6 @@ pub fn extract_name(line: &str) -> Result<String, ExtractError> {
 pub fn extract_name_from_detail(response: &str) -> Result<String, ExtractError> {
     for line in response.lines() {
         let trimmed = line.trim();
-        // TWD format: "1.NAME    ADT  ST"
         if let Some(rest) = trimmed.strip_prefix("1.") {
             if let Some(name) = rest.split("  ").next() {
                 let name = name.trim();
@@ -206,7 +205,6 @@ pub fn extract_name_from_detail(response: &str) -> Result<String, ExtractError> 
                 }
             }
         }
-        // EWD format: "PAX- NAME   ADT"
         if let Some(rest) = trimmed.strip_prefix("PAX- ") {
             if let Some(name) = rest.split("  ").next() {
                 let name = name.trim();
@@ -298,9 +296,7 @@ pub fn extract_basic_from_twd(response: &str) -> Result<String, ExtractError> {
         let trimmed = line.trim();
         if trimmed.starts_with("EQUIV") {
             let parts: Vec<&str> = trimmed.split_whitespace().collect();
-            // "EQUIV EGP 23378.00 BSR 50.60"  → parts[2] = amount
-            // "EQUIV BSR 57.96706247"         → no amount (IT fare)
-            if parts.len() >= 3 && parts[1] != "BSR" {
+            if parts.len() >= 3 && parts[1] != "BSR" && parts[2].chars().any(|c| c.is_ascii_digit()) {
                 return Ok(parts[2].to_string());
             }
         }
@@ -340,7 +336,6 @@ pub fn parse_tjq_data_lines(response: &str) -> Vec<String> {
             separators += 1;
             continue;
         }
-        // Full TJQ format: wait for 2nd separator, then skip header
         if has_separators {
             if separators < 2 {
                 continue;
@@ -349,7 +344,6 @@ pub fn parse_tjq_data_lines(response: &str) -> Vec<String> {
                 continue;
             }
         }
-        // MD response (no separators): skip continuation lines (no SEQ NO with *)
         let first_token = trimmed.split_whitespace().next().unwrap_or("");
         if !first_token.contains('*') {
             continue;
@@ -593,7 +587,6 @@ mod tests {
                     FO 077-6908236368CAI08JUL26/90202092/077-6908236368\n\
                     FP O/CASH+/CASH\n\
                     FT EVA";
-        // This TWD has no EQUIV line → should fail, falling back to TJQ computation
         assert!(extract_basic_from_twd(twd).is_err());
     }
 
@@ -615,7 +608,6 @@ mod tests {
                     NON-ENDORSABLE\n\
                     FOR TAX/FEE DETAILS USE TWD/TAX\n\
                     NET REPORTING IT/BT";
-        // IT fare with only BSR (no amount) → should fail, fall back to TJQ
         assert!(extract_basic_from_twd(twd).is_err());
     }
 
@@ -636,6 +628,28 @@ mod tests {
                     FP CASH\n\
                     FOR TAX/FEE DETAILS USE TWD/TAX";
         assert_eq!(extract_basic_from_twd(twd).unwrap(), "23378.00");
+    }
+
+    #[test]
+    fn test_extract_basic_from_twd_equiv_with_non_numeric_value() {
+        let twd = "TKT-0656908226439        RCI-                     1A  LOC-8E87FD\n\
+                    OD-CAICAI  SI-      FCPI-0   POI-CAI  DOI-26JUN26  IOI-90289892\n\
+                      1.HABASHI/WAHID MR          ADT            ST\n\
+                    1 OCAI SV 322   B 27JUL0445 OK BARTEGB4      F   27JUL27JUL 1PC\n\
+                    2 ORUH SV 417   L 28JUL1150 OK LARTEGB4      A   28JUL28JUL 1PC\n\
+                       CAI\n\
+                    FARE   R USD       328.00\n\
+                    EQUIV    EGP          EGP       BSR        51.40\n\
+                    TOTALTAX EGP       250.80\n\
+                    TAXES    PD\n\
+                    TOTAL    EGP      7960.80A\n\
+                    /FC CAI SV RUH175.50SV CAI Q85.00 67.50NUC328.00END ROE1.00\n\
+                    FE REC0SV - EGP5565.00 NONREF - TKT VALD 1Y FRM ISSUE DATE\n\
+                    FO 065-6901116408CAI21JUN26/90202092/065-6923236408\n\
+                    FP O/CA+/CASH\n\
+                    FOR TAX/FEE DETAILS USE TWD/TAX\n\
+                    SAC- 065R9JHZSQZK3";
+        assert!(extract_basic_from_twd(twd).is_err());
     }
 
     #[test]
