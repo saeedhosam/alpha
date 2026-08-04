@@ -390,7 +390,7 @@ pub struct TicketCsvRow {
 
 pub fn format_csv_row(row: &TicketCsvRow) -> String {
     format!(
-        "{},{},{},{},{},{},{},{},{},{},{}",
+        "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
         row.sign,
         row.airline,
         row.ticket_no,
@@ -791,7 +791,7 @@ mod tests {
         };
         assert_eq!(
             format_csv_row(&row),
-            "Amira,MS,6901233301,Reissue,HANNA/SA,19JUL,CAI-HGH-CAI,EVA,1458.00,2339.00,Cash"
+            "Amira\tMS\t6901233301\tReissue\tHANNA/SA\t19JUL\tCAI-HGH-CAI\tEVA\t1458.00\t2339.00\tCash"
         );
     }
 
