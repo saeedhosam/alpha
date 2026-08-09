@@ -28,7 +28,7 @@ async fn send_command(
     page: &chromiumoxide::Page,
     cmd: &str,
 ) -> Result<String, Box<dyn std::error::Error>> {
-    let selector = "#cryptics1_cmd_shellbridge_shellWindow_top_left_modeString_cmdPromptInput";
+    let selector = "#cryptics2_cmd_shellbridge_shellWindow_top_left_modeString_cmdPromptInput";
     let input = page.find_element(selector).await?;
     input.click().await?;
     input.type_str(cmd).await?;
@@ -39,7 +39,7 @@ async fn send_command(
 async fn wait_for_response(
     page: &chromiumoxide::Page,
 ) -> Result<String, Box<dyn std::error::Error>> {
-    let selector = "#cryptics1_cmd_shellbridge_shellWindow_top_left_modeString_currentCommand .command .cmdResponse";
+    let selector = "#cryptics2_cmd_shellbridge_shellWindow_top_left_modeString_currentCommand .command .cmdResponse";
     let timeout = Duration::from_secs(30);
     let start = std::time::Instant::now();
 
