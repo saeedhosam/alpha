@@ -141,12 +141,16 @@ pub fn map_sign(code: &str) -> Result<&'static str, ExtractError> {
 
 fn tokenize_tjq_line(line: &str) -> Result<Vec<&str>, ExtractError> {
     let tokens: Vec<&str> = line.split_whitespace().collect();
-    if tokens.len() < 11 {
+    if tokens.len() < 10 {
         return Err(ExtractError::InvalidFormat(
-            "TJQ line has fewer than 11 fields".into(),
+            "TJQ line has fewer than 10 fields".into(),
         ));
     }
     Ok(tokens)
+}
+
+fn is_compact_void(tokens: &[&str]) -> bool {
+    tokens.len() == 10 && matches!(tokens.last(), Some(&"CANX") | Some(&"CANN"))
 }
 
 fn parse_amount(s: &str) -> f64 {
@@ -178,8 +182,12 @@ pub fn extract_ticket_no(line: &str) -> Result<String, ExtractError> {
 
 pub fn extract_doc_type(line: &str) -> Result<String, ExtractError> {
     let tokens = tokenize_tjq_line(line)?;
-    let trnc = tokens[10];
-    let fop = tokens[6];
+    let trnc = tokens.last().unwrap();
+    let fop = if is_compact_void(&tokens) {
+        ""
+    } else {
+        tokens[6]
+    };
     Ok(map_doc_type(trnc, fop))
 }
 
@@ -313,18 +321,24 @@ pub fn extract_total(line: &str) -> Result<String, ExtractError> {
 
 pub fn extract_fop(line: &str) -> Result<String, ExtractError> {
     let tokens = tokenize_tjq_line(line)?;
-    Ok(map_fop(tokens[6]))
+    Ok(map_fop(if is_compact_void(&tokens) {
+        ""
+    } else {
+        tokens[6]
+    }))
 }
 
 pub fn extract_sign(line: &str) -> Result<String, ExtractError> {
     let tokens = tokenize_tjq_line(line)?;
-    let code = tokens[8];
+    let code = if is_compact_void(&tokens) {
+        tokens[7]
+    } else {
+        tokens[8]
+    };
     map_sign(code).map(|s| s.to_string())
 }
 
 pub fn parse_tjq_data_lines(response: &str) -> Vec<String> {
-    let has_separators = response.lines().any(|l| l.trim().starts_with("---"));
-    let mut separators = 0;
     let mut lines = Vec::new();
 
     for line in response.lines() {
@@ -333,16 +347,10 @@ pub fn parse_tjq_data_lines(response: &str) -> Vec<String> {
             continue;
         }
         if trimmed.starts_with("---") {
-            separators += 1;
             continue;
         }
-        if has_separators {
-            if separators < 2 {
-                continue;
-            }
-            if trimmed.contains("SEQ NO") {
-                continue;
-            }
+        if trimmed.contains("SEQ NO") {
+            continue;
         }
         let first_token = trimmed.split_whitespace().next().unwrap_or("");
         if !first_token.contains('*') {
@@ -763,6 +771,27 @@ mod tests {
         assert!(lines[0].contains("1912345288"));
         assert!(lines[1].contains("6912345373"));
         assert!(lines[2].contains("1912345289"));
+    }
+
+    #[test]
+    fn test_parse_tjq_data_lines_md_response_with_separator() {
+        let response = "SEQ NO A/L DOC NUMBER TOTAL DOC    TAX    FEE   COMM FP PAX NAME AS RLOC   TRNC\n\
+                        -------------------------------------------------------------------------------\n\
+                        012643*077 1951947193   2500.00   0.00   0.00   0.00 CA NABASIRY SH 8TPILL CANX\n\
+                        012645*220 6908236448  26514.80 7839.T   0.00   0.00 CA SAROFIM/ AE 8DASC5 TKTT";
+        let lines = parse_tjq_data_lines(response);
+        assert_eq!(lines.len(), 2);
+        assert!(lines[0].contains("1951947193"));
+        assert!(lines[1].contains("6908236448"));
+    }
+
+    #[test]
+    fn test_compact_void_line_with_blank_fop() {
+        let line = "012635*077 1951947181      0.00   0.00   0.00   0.00    ABOUELDA SH 8TPILL CANX";
+        assert_eq!(extract_ticket_key(line).unwrap(), "077:1951947181");
+        assert_eq!(extract_doc_type(line).unwrap(), "Void");
+        assert_eq!(extract_fop(line).unwrap(), "");
+        assert_eq!(extract_sign(line).unwrap(), "Saeed");
     }
 
     #[test]

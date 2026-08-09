@@ -125,9 +125,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     for (i, tjq_line) in all_tickets.iter().enumerate() {
         let airline_code = extract_airline_code(tjq_line)?;
         let ticket_no = extract_ticket_no(tjq_line)?;
-        let doc_type = extract_doc_type(tjq_line)?;
+        let mut doc_type = extract_doc_type(tjq_line)?;
+        let is_void = doc_type == "Void";
 
-        let detail_cmd = if doc_type == "EMD" {
+        let mut detail_cmd = if doc_type == "EMD" {
             format!("EWD/EMD{}-{}", airline_code, ticket_no)
         } else {
             format!("TWD/TKT{}-{}", airline_code, ticket_no)
@@ -139,10 +140,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             all_tickets.len(),
             detail_cmd
         );
-        let detail_response = send_command(&target_page, &detail_cmd).await?;
+        let mut detail_response = send_command(&target_page, &detail_cmd).await?;
+
+        if doc_type == "Void"
+            && detail_response
+                .to_ascii_uppercase()
+                .contains("MS ETKT: TICKET NUMBER NOT FOUND")
+        {
+            doc_type = "EMD".to_string();
+            detail_cmd = format!("EWD/EMD{}-{}", airline_code, ticket_no);
+            println!("    TWD ticket not found, retrying: {}", detail_cmd);
+            detail_response = send_command(&target_page, &detail_cmd).await?;
+        }
 
         let is_emd = doc_type == "EMD";
-        let is_void = doc_type == "Void";
 
         let row = TicketCsvRow {
             airline: extract_airline(tjq_line)?,
