@@ -153,21 +153,38 @@ fn is_compact_void(tokens: &[&str]) -> bool {
     tokens.len() == 10 && matches!(tokens.last(), Some(&"CANX") | Some(&"CANN"))
 }
 
+fn has_starred_sequence(tokens: &[&str]) -> bool {
+    tokens.first().is_some_and(|token| token.contains('*'))
+}
+
 fn parse_amount(s: &str) -> f64 {
-    let clean: String = s
+    let mut chars = s.chars();
+    let sign = match chars.next() {
+        Some('-') => "-",
+        Some('+') => "+",
+        Some(_) => "",
+        None => return 0.0,
+    };
+    let remainder = if sign.is_empty() { s } else { chars.as_str() };
+    let digits: String = remainder
         .chars()
         .take_while(|c| c.is_ascii_digit() || *c == '.')
         .collect();
+    let clean = format!("{}{}", sign, digits);
     clean.parse::<f64>().unwrap_or(0.0)
 }
 
 pub fn extract_airline_code(line: &str) -> Result<String, ExtractError> {
     let tokens = tokenize_tjq_line(line)?;
-    tokens[0]
-        .split('*')
-        .nth(1)
-        .map(|s| s.to_string())
-        .ok_or_else(|| ExtractError::ParseError("SEQ NO field missing '*' separator".into()))
+    if has_starred_sequence(&tokens) {
+        tokens[0]
+            .split('*')
+            .nth(1)
+            .map(|s| s.to_string())
+            .ok_or_else(|| ExtractError::ParseError("invalid starred sequence field".into()))
+    } else {
+        Ok(tokens[1].to_string())
+    }
 }
 
 pub fn extract_airline(line: &str) -> Result<String, ExtractError> {
@@ -177,7 +194,7 @@ pub fn extract_airline(line: &str) -> Result<String, ExtractError> {
 
 pub fn extract_ticket_no(line: &str) -> Result<String, ExtractError> {
     let tokens = tokenize_tjq_line(line)?;
-    Ok(tokens[1].to_string())
+    Ok(tokens[if has_starred_sequence(&tokens) { 1 } else { 2 }].to_string())
 }
 
 pub fn extract_doc_type(line: &str) -> Result<String, ExtractError> {
@@ -294,8 +311,9 @@ pub fn extract_tour_code(response: &str) -> Result<String, ExtractError> {
 
 pub fn extract_basic(line: &str) -> Result<String, ExtractError> {
     let tokens = tokenize_tjq_line(line)?;
-    let total = parse_amount(tokens[2]);
-    let tax = parse_amount(tokens[3]);
+    let total_index = if has_starred_sequence(&tokens) { 2 } else { 3 };
+    let total = parse_amount(tokens[total_index]);
+    let tax = parse_amount(tokens[total_index + 1]);
     Ok(format!("{:.2}", total - tax))
 }
 
@@ -316,7 +334,8 @@ pub fn extract_basic_from_twd(response: &str) -> Result<String, ExtractError> {
 
 pub fn extract_total(line: &str) -> Result<String, ExtractError> {
     let tokens = tokenize_tjq_line(line)?;
-    Ok(format!("{:.2}", parse_amount(tokens[2])))
+    let total_index = if has_starred_sequence(&tokens) { 2 } else { 3 };
+    Ok(format!("{:.2}", parse_amount(tokens[total_index])))
 }
 
 pub fn extract_fop(line: &str) -> Result<String, ExtractError> {
@@ -352,8 +371,11 @@ pub fn parse_tjq_data_lines(response: &str) -> Vec<String> {
         if trimmed.contains("SEQ NO") {
             continue;
         }
-        let first_token = trimmed.split_whitespace().next().unwrap_or("");
-        if !first_token.contains('*') {
+        let tokens: Vec<&str> = trimmed.split_whitespace().collect();
+        let first_token = tokens.first().copied().unwrap_or("");
+        let is_data_row = first_token.contains('*')
+            || (first_token.chars().all(|c| c.is_ascii_digit()) && tokens.len() >= 10);
+        if !is_data_row {
             continue;
         }
         lines.push(line.to_string());
@@ -364,11 +386,16 @@ pub fn parse_tjq_data_lines(response: &str) -> Vec<String> {
 
 pub fn extract_ticket_key(line: &str) -> Result<String, ExtractError> {
     let tokens = tokenize_tjq_line(line)?;
-    let code = tokens[0]
-        .split('*')
-        .nth(1)
-        .ok_or_else(|| ExtractError::ParseError("SEQ NO missing '*' separator".into()))?;
-    Ok(format!("{}:{}", code, tokens[1]))
+    let (code, ticket_index) = if has_starred_sequence(&tokens) {
+        let code = tokens[0]
+            .split('*')
+            .nth(1)
+            .ok_or_else(|| ExtractError::ParseError("invalid starred sequence field".into()))?;
+        (code, 1)
+    } else {
+        (tokens[1], 2)
+    };
+    Ok(format!("{}:{}", code, tokens[ticket_index]))
 }
 
 pub fn has_more_pages(response: &str) -> bool {
@@ -474,6 +501,19 @@ mod tests {
     fn test_extract_ticket_no() {
         assert_eq!(extract_ticket_no(TJQ_XA).unwrap(), "6901233301");
         assert_eq!(extract_ticket_no(TJQ_EMDS).unwrap(), "6908222302");
+    }
+
+    #[test]
+    fn test_extract_unstarred_refund() {
+        let refund =
+            "012652 077 6908236398 -12079.00-6162.T   0.00   0.00 CA NABASIRY SH 8TPILL RFND";
+        assert_eq!(extract_airline_code(refund).unwrap(), "077");
+        assert_eq!(extract_ticket_no(refund).unwrap(), "6908236398");
+        assert_eq!(extract_doc_type(refund).unwrap(), "Refund");
+        assert_eq!(extract_total(refund).unwrap(), "-12079.00");
+        assert_eq!(extract_fop(refund).unwrap(), "Cash");
+        assert_eq!(extract_sign(refund).unwrap(), "Saeed");
+        assert_eq!(extract_ticket_key(refund).unwrap(), "077:6908236398");
     }
 
     #[test]
@@ -783,6 +823,15 @@ mod tests {
         assert_eq!(lines.len(), 2);
         assert!(lines[0].contains("1951947193"));
         assert!(lines[1].contains("6908236448"));
+    }
+
+    #[test]
+    fn test_parse_tjq_data_lines_includes_unstarred_refund() {
+        let response = "012651*077 1951947994  24411.00   0.00   0.00   0.00 CA MS/NTBA AE X9JYXM EMDS\n\
+                        012652 077 6908236398 -12079.00-6162.T   0.00   0.00 CA NABASIRY SH 8TPILL RFND";
+        let lines = parse_tjq_data_lines(response);
+        assert_eq!(lines.len(), 2);
+        assert!(lines[1].contains("RFND"));
     }
 
     #[test]
