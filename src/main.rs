@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use arboard::Clipboard;
 
-use chromiumoxide::Browser;
+use chromiumoxide::{Browser, Element};
 use futures::StreamExt;
 use serde::Deserialize;
 
@@ -28,18 +28,39 @@ async fn send_command(
     page: &chromiumoxide::Page,
     cmd: &str,
 ) -> Result<String, Box<dyn std::error::Error>> {
-    let selector = "#cryptics2_cmd_shellbridge_shellWindow_top_left_modeString_cmdPromptInput";
-    let input = page.find_element(selector).await?;
+    let selector = "[id$=\"_cmd_shellbridge_shellWindow_top_left_modeString_cmdPromptInput\"]";
+    let mut visible_input: Option<(Element, String)> = None;
+    for candidate in page.find_elements(selector).await? {
+        let bounds = candidate.bounding_box().await?;
+        if bounds.width > 0.0 && bounds.height > 0.0 {
+            let id = candidate
+                .property("id")
+                .await?
+                .and_then(|value| value.as_str().map(str::to_owned))
+                .ok_or("Command input has no id")?;
+            let prefix = id
+                .strip_suffix("_cmdPromptInput")
+                .ok_or("Unexpected command input id")?;
+            let response_selector = format!(
+                "#{prefix}_currentCommand .command .cmdResponse"
+            );
+            visible_input = Some((candidate, response_selector));
+            break;
+        }
+    }
+
+    let (input, response_selector) =
+        visible_input.ok_or("Visible Amadeus command input not found")?;
     input.click().await?;
     input.type_str(cmd).await?;
     input.press_key("Enter").await?;
-    wait_for_response(page).await
+    wait_for_response(page, &response_selector).await
 }
 
 async fn wait_for_response(
     page: &chromiumoxide::Page,
+    selector: &str,
 ) -> Result<String, Box<dyn std::error::Error>> {
-    let selector = "#cryptics2_cmd_shellbridge_shellWindow_top_left_modeString_currentCommand .command .cmdResponse";
     let timeout = Duration::from_secs(30);
     let start = std::time::Instant::now();
 
