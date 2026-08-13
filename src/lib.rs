@@ -153,6 +153,10 @@ fn is_compact_void(tokens: &[&str]) -> bool {
     tokens.len() == 10 && matches!(tokens.last(), Some(&"CANX") | Some(&"CANN"))
 }
 
+fn is_compact_emd(tokens: &[&str]) -> bool {
+    tokens.len() == 10 && matches!(tokens.last(), Some(&"EMDA") | Some(&"EMDS"))
+}
+
 fn has_starred_sequence(tokens: &[&str]) -> bool {
     tokens.first().is_some_and(|token| token.contains('*'))
 }
@@ -200,7 +204,7 @@ pub fn extract_ticket_no(line: &str) -> Result<String, ExtractError> {
 pub fn extract_doc_type(line: &str) -> Result<String, ExtractError> {
     let tokens = tokenize_tjq_line(line)?;
     let trnc = tokens.last().unwrap();
-    let fop = if is_compact_void(&tokens) {
+    let fop = if is_compact_void(&tokens) || is_compact_emd(&tokens) {
         ""
     } else {
         tokens[6]
@@ -340,7 +344,7 @@ pub fn extract_total(line: &str) -> Result<String, ExtractError> {
 
 pub fn extract_fop(line: &str) -> Result<String, ExtractError> {
     let tokens = tokenize_tjq_line(line)?;
-    Ok(map_fop(if is_compact_void(&tokens) {
+    Ok(map_fop(if is_compact_void(&tokens) || is_compact_emd(&tokens) {
         ""
     } else {
         tokens[6]
@@ -349,7 +353,7 @@ pub fn extract_fop(line: &str) -> Result<String, ExtractError> {
 
 pub fn extract_sign(line: &str) -> Result<String, ExtractError> {
     let tokens = tokenize_tjq_line(line)?;
-    let code = if is_compact_void(&tokens) {
+    let code = if is_compact_void(&tokens) || is_compact_emd(&tokens) {
         tokens[7]
     } else {
         tokens[8]
@@ -721,6 +725,15 @@ mod tests {
     fn test_extract_sign() {
         assert_eq!(extract_sign(TJQ_XA).unwrap(), "Amira");
         assert_eq!(extract_sign(TJQ_EMDS).unwrap(), "Amal");
+    }
+
+    #[test]
+    fn test_compact_zero_value_emd() {
+        let line =
+            "012706*077 1916516306      0.00   0.00   0.00   0.00    GABER/MA AE 9AQWVE EMDS";
+        assert_eq!(extract_doc_type(line).unwrap(), "EMD");
+        assert_eq!(extract_fop(line).unwrap(), "");
+        assert_eq!(extract_sign(line).unwrap(), "Amal");
     }
 
     #[test]
