@@ -1,6 +1,4 @@
 use std::collections::HashSet;
-use std::fs;
-use std::path::Path;
 use std::time::Duration;
 
 use arboard::Clipboard;
@@ -211,17 +209,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         csv_lines.push(format_csv_row(&row));
     }
 
-    let dir = Path::new("tickets");
-    fs::create_dir_all(dir)?;
-    let filepath = dir.join(format!("{}.csv", date));
     let csv_content = csv_lines.join("\n");
-    fs::write(&filepath, &csv_content)?;
-
-    println!(
-        "Written {} ticket(s) to {}",
-        csv_lines.len(),
-        filepath.display()
-    );
 
     if let Ok(mut clip) = Clipboard::new() {
         let _ = clip.set_text(csv_content);
