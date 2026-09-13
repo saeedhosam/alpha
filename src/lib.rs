@@ -21,15 +21,34 @@ impl fmt::Display for ExtractError {
 
 impl std::error::Error for ExtractError {}
 
-fn airline_3to2() -> [(&'static str, &'static str); 25] {
+fn airline_3to2() -> [(&'static str, &'static str); 26] {
     [
-        ("876", "3U"), ("390", "A3"), ("057", "AF"), ("147", "AT"),
-        ("055", "AZ"), ("125", "BA"), ("176", "EK"), ("075", "IB"),
-        ("220", "LH"), ("080", "LO"), ("724", "LX"), ("076", "ME"),
-        ("077", "MS"), ("781", "MU"), ("477", "NE"), ("325", "NP"),
-        ("257", "OS"), ("157", "QR"), ("512", "RJ"), ("381", "SM"),
-        ("065", "SV"), ("235", "TK"), ("199", "TU"), ("204", "VF"),
+        ("876", "3U"),
+        ("390", "A3"),
+        ("057", "AF"),
+        ("147", "AT"),
+        ("055", "AZ"),
+        ("125", "BA"),
+        ("176", "EK"),
+        ("075", "IB"),
+        ("220", "LH"),
+        ("080", "LO"),
+        ("724", "LX"),
+        ("076", "ME"),
+        ("077", "MS"),
+        ("781", "MU"),
+        ("477", "NE"),
+        ("325", "NP"),
+        ("257", "OS"),
+        ("157", "QR"),
+        ("512", "RJ"),
+        ("381", "SM"),
+        ("065", "SV"),
+        ("235", "TK"),
+        ("199", "TU"),
+        ("204", "VF"),
         ("910", "WY"),
+        ("030", "VY"),
     ]
 }
 
@@ -53,7 +72,7 @@ fn parse_csv_line(line: &str) -> Option<(String, String)> {
     let mut field = 0;
     let mut current = String::new();
 
-    while let Some(c) = chars.next() {
+    for c in chars.by_ref() {
         if field == 0 && c == ',' {
             iata = current.trim().to_string();
             current.clear();
@@ -122,12 +141,13 @@ pub fn map_fop(fop: &str) -> String {
     }
 }
 
-fn sign_map() -> [(&'static str, &'static str); 4] {
+fn sign_map() -> [(&'static str, &'static str); 5] {
     [
         ("AE", "Amal"),
         ("AS", "Amira"),
         ("MA", "Noha"),
         ("SH", "Saeed"),
+        ("MS", "Maha"),
     ]
 }
 
@@ -178,6 +198,18 @@ fn parse_amount(s: &str) -> f64 {
     clean.parse::<f64>().unwrap_or(0.0)
 }
 
+fn split_merged_ticket_amount(token: &str) -> Option<(&str, &str)> {
+    let digits_len = token.bytes().take_while(|b| b.is_ascii_digit()).count();
+    if digits_len < 10 || digits_len >= token.len() {
+        return None;
+    }
+    let rest = &token[digits_len..];
+    if !rest.starts_with('-') && !rest.starts_with('+') {
+        return None;
+    }
+    Some((&token[..digits_len], rest))
+}
+
 pub fn extract_airline_code(line: &str) -> Result<String, ExtractError> {
     let tokens = tokenize_tjq_line(line)?;
     if has_starred_sequence(&tokens) {
@@ -198,7 +230,11 @@ pub fn extract_airline(line: &str) -> Result<String, ExtractError> {
 
 pub fn extract_ticket_no(line: &str) -> Result<String, ExtractError> {
     let tokens = tokenize_tjq_line(line)?;
-    Ok(tokens[if has_starred_sequence(&tokens) { 1 } else { 2 }].to_string())
+    let ticket_index = if has_starred_sequence(&tokens) { 1 } else { 2 };
+    let ticket = tokens[ticket_index];
+    Ok(split_merged_ticket_amount(ticket)
+        .map(|(t, _)| t.to_string())
+        .unwrap_or_else(|| ticket.to_string()))
 }
 
 pub fn extract_doc_type(line: &str) -> Result<String, ExtractError> {
@@ -316,8 +352,14 @@ pub fn extract_tour_code(response: &str) -> Result<String, ExtractError> {
 pub fn extract_basic(line: &str) -> Result<String, ExtractError> {
     let tokens = tokenize_tjq_line(line)?;
     let total_index = if has_starred_sequence(&tokens) { 2 } else { 3 };
-    let total = parse_amount(tokens[total_index]);
-    let tax = parse_amount(tokens[total_index + 1]);
+    let ticket_index = if has_starred_sequence(&tokens) { 1 } else { 2 };
+    let (total, tax) = match split_merged_ticket_amount(tokens[ticket_index]) {
+        Some((_, amount)) => (parse_amount(amount), parse_amount(tokens[total_index])),
+        None => (
+            parse_amount(tokens[total_index]),
+            parse_amount(tokens[total_index + 1]),
+        ),
+    };
     Ok(format!("{:.2}", total - tax))
 }
 
@@ -326,7 +368,8 @@ pub fn extract_basic_from_twd(response: &str) -> Result<String, ExtractError> {
         let trimmed = line.trim();
         if trimmed.starts_with("EQUIV") {
             let parts: Vec<&str> = trimmed.split_whitespace().collect();
-            if parts.len() >= 3 && parts[1] != "BSR" && parts[2].chars().any(|c| c.is_ascii_digit()) {
+            if parts.len() >= 3 && parts[1] != "BSR" && parts[2].chars().any(|c| c.is_ascii_digit())
+            {
                 return Ok(parts[2].to_string());
             }
         }
@@ -339,16 +382,23 @@ pub fn extract_basic_from_twd(response: &str) -> Result<String, ExtractError> {
 pub fn extract_total(line: &str) -> Result<String, ExtractError> {
     let tokens = tokenize_tjq_line(line)?;
     let total_index = if has_starred_sequence(&tokens) { 2 } else { 3 };
-    Ok(format!("{:.2}", parse_amount(tokens[total_index])))
+    let ticket_index = if has_starred_sequence(&tokens) { 1 } else { 2 };
+    let total = match split_merged_ticket_amount(tokens[ticket_index]) {
+        Some((_, amount)) => parse_amount(amount),
+        None => parse_amount(tokens[total_index]),
+    };
+    Ok(format!("{:.2}", total))
 }
 
 pub fn extract_fop(line: &str) -> Result<String, ExtractError> {
     let tokens = tokenize_tjq_line(line)?;
-    Ok(map_fop(if is_compact_void(&tokens) || is_compact_emd(&tokens) {
-        ""
-    } else {
-        tokens[6]
-    }))
+    Ok(map_fop(
+        if is_compact_void(&tokens) || is_compact_emd(&tokens) {
+            ""
+        } else {
+            tokens[6]
+        },
+    ))
 }
 
 pub fn extract_sign(line: &str) -> Result<String, ExtractError> {
@@ -399,7 +449,10 @@ pub fn extract_ticket_key(line: &str) -> Result<String, ExtractError> {
     } else {
         (tokens[1], 2)
     };
-    Ok(format!("{}:{}", code, tokens[ticket_index]))
+    let ticket = tokens[ticket_index];
+    let ticket = split_merged_ticket_amount(ticket)
+        .map_or(ticket, |(t, _)| t);
+    Ok(format!("{}:{}", code, ticket))
 }
 
 pub fn has_more_pages(response: &str) -> bool {
@@ -543,18 +596,12 @@ mod tests {
 
     #[test]
     fn test_extract_name_from_twd_detail() {
-        assert_eq!(
-            extract_name_from_detail(TWD).unwrap(),
-            "HANNA/SAMER MR"
-        );
+        assert_eq!(extract_name_from_detail(TWD).unwrap(), "HANNA/SAMER MR");
     }
 
     #[test]
     fn test_extract_name_from_ewd_detail() {
-        assert_eq!(
-            extract_name_from_detail(EWD).unwrap(),
-            "HANNA/SAMER MR"
-        );
+        assert_eq!(extract_name_from_detail(EWD).unwrap(), "HANNA/SAMER MR");
     }
 
     #[test]
@@ -803,14 +850,8 @@ mod tests {
 
     #[test]
     fn test_extract_ticket_key() {
-        assert_eq!(
-            extract_ticket_key(TJQ_XA).unwrap(),
-            "077:6901233301"
-        );
-        assert_eq!(
-            extract_ticket_key(TJQ_EMDS).unwrap(),
-            "235:6908222302"
-        );
+        assert_eq!(extract_ticket_key(TJQ_XA).unwrap(), "077:6901233301");
+        assert_eq!(extract_ticket_key(TJQ_EMDS).unwrap(), "235:6908222302");
     }
 
     #[test]
@@ -849,11 +890,34 @@ mod tests {
 
     #[test]
     fn test_compact_void_line_with_blank_fop() {
-        let line = "012635*077 1951947181      0.00   0.00   0.00   0.00    ABOUELDA SH 8TPILL CANX";
+        let line =
+            "012635*077 1951947181      0.00   0.00   0.00   0.00    ABOUELDA SH 8TPILL CANX";
         assert_eq!(extract_ticket_key(line).unwrap(), "077:1951947181");
         assert_eq!(extract_doc_type(line).unwrap(), "Void");
         assert_eq!(extract_fop(line).unwrap(), "");
         assert_eq!(extract_sign(line).unwrap(), "Saeed");
+    }
+
+    #[test]
+    fn test_extract_merged_refund() {
+        let line =
+            "012882 080 1251938294-102200.00   0.00   0.00   0.00 CA MINDSET/ AE Z5MVLB RFND";
+        assert_eq!(extract_airline_code(line).unwrap(), "080");
+        assert_eq!(extract_ticket_no(line).unwrap(), "1251938294");
+        assert_eq!(extract_doc_type(line).unwrap(), "Refund");
+        assert_eq!(extract_total(line).unwrap(), "-102200.00");
+        assert_eq!(extract_fop(line).unwrap(), "Cash");
+        assert_eq!(extract_sign(line).unwrap(), "Amal");
+        assert_eq!(extract_ticket_key(line).unwrap(), "080:1251938294");
+        assert_eq!(extract_basic(line).unwrap(), "-102200.00");
+    }
+
+    #[test]
+    fn test_parse_tjq_data_lines_includes_merged_refund() {
+        let response = "012882 080 1251938294-102200.00   0.00   0.00   0.00 CA MINDSET/ AE Z5MVLB RFND";
+        let lines = parse_tjq_data_lines(response);
+        assert_eq!(lines.len(), 1);
+        assert!(lines[0].contains("RFND"));
     }
 
     #[test]
