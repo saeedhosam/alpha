@@ -161,14 +161,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         );
         let mut detail_response = send_command(&target_page, &detail_cmd).await?;
 
-        if doc_type == "Void"
+        if (doc_type == "Void" || doc_type == "Refund")
             && detail_response
                 .to_ascii_uppercase()
-                .contains("MS ETKT: TICKET NUMBER NOT FOUND")
+                .contains("TICKET NUMBER NOT FOUND")
         {
             doc_type = "EMD".to_string();
             detail_cmd = format!("EWD/EMD{}-{}", airline_code, ticket_no);
-            println!("    TWD ticket not found, retrying: {}", detail_cmd);
+            println!("    TWD ticket not found, retrying as EMD: {}", detail_cmd);
             detail_response = send_command(&target_page, &detail_cmd).await?;
         }
 
