@@ -177,6 +177,49 @@ fn is_compact_emd(tokens: &[&str]) -> bool {
     tokens.len() == 10 && matches!(tokens.last(), Some(&"EMDA") | Some(&"EMDS"))
 }
 
+fn is_sign_code(code: &str) -> bool {
+    sign_map().iter().any(|(c, _)| *c == code)
+}
+
+fn sign_index(tokens: &[&str]) -> Option<usize> {
+    let after_name = tokens
+        .iter()
+        .position(|t| t.contains('/'))
+        .filter(|&idx| tokens.get(idx + 1).is_some_and(|c| is_sign_code(c)));
+    if let Some(name_idx) = after_name {
+        return Some(name_idx + 1);
+    }
+    let end = tokens.len().saturating_sub(1);
+    tokens[..end].iter().rposition(|t| is_sign_code(t))
+}
+
+fn fop_code<'a>(tokens: &'a [&'a str]) -> &'a str {
+    let anchor = match tokens.iter().position(|t| t.contains('/')) {
+        Some(name_idx) if name_idx > 0 => Some(name_idx - 1),
+        _ => sign_index(tokens).and_then(|idx| idx.checked_sub(2)),
+    };
+    match anchor {
+        Some(idx) => {
+            let candidate = tokens[idx];
+            if !candidate.is_empty()
+                && candidate.len() <= 4
+                && candidate.chars().all(|c| c.is_ascii_alphabetic())
+            {
+                candidate
+            } else {
+                ""
+            }
+        }
+        None => {
+            if is_compact_void(tokens) || is_compact_emd(tokens) {
+                ""
+            } else {
+                tokens.get(6).copied().unwrap_or("")
+            }
+        }
+    }
+}
+
 fn has_starred_sequence(tokens: &[&str]) -> bool {
     tokens.first().is_some_and(|token| token.contains('*'))
 }
@@ -240,12 +283,7 @@ pub fn extract_ticket_no(line: &str) -> Result<String, ExtractError> {
 pub fn extract_doc_type(line: &str) -> Result<String, ExtractError> {
     let tokens = tokenize_tjq_line(line)?;
     let trnc = tokens.last().unwrap();
-    let fop = if is_compact_void(&tokens) || is_compact_emd(&tokens) {
-        ""
-    } else {
-        tokens[6]
-    };
-    Ok(map_doc_type(trnc, fop))
+    Ok(map_doc_type(trnc, fop_code(&tokens)))
 }
 
 pub fn extract_name(line: &str) -> Result<String, ExtractError> {
@@ -392,23 +430,23 @@ pub fn extract_total(line: &str) -> Result<String, ExtractError> {
 
 pub fn extract_fop(line: &str) -> Result<String, ExtractError> {
     let tokens = tokenize_tjq_line(line)?;
-    Ok(map_fop(
-        if is_compact_void(&tokens) || is_compact_emd(&tokens) {
-            ""
-        } else {
-            tokens[6]
-        },
-    ))
+    Ok(map_fop(fop_code(&tokens)))
 }
 
 pub fn extract_sign(line: &str) -> Result<String, ExtractError> {
     let tokens = tokenize_tjq_line(line)?;
-    let code = if is_compact_void(&tokens) || is_compact_emd(&tokens) {
-        tokens[7]
+    if let Some(idx) = sign_index(&tokens) {
+        return map_sign(tokens[idx]).map(|s| s.to_string());
+    }
+    let fallback = if is_compact_void(&tokens) || is_compact_emd(&tokens) {
+        tokens.get(7)
     } else {
-        tokens[8]
+        tokens.get(8)
     };
-    map_sign(code).map(|s| s.to_string())
+    match fallback {
+        Some(code) => map_sign(code).map(|s| s.to_string()),
+        None => Err(ExtractError::InvalidFormat("AS field missing".into())),
+    }
 }
 
 pub fn parse_tjq_data_lines(response: &str) -> Vec<String> {
@@ -781,6 +819,31 @@ mod tests {
         assert_eq!(extract_doc_type(line).unwrap(), "EMD");
         assert_eq!(extract_fop(line).unwrap(), "");
         assert_eq!(extract_sign(line).unwrap(), "Amal");
+    }
+
+    #[test]
+    fn test_extract_unstarred_full_emd() {
+        let line = "012882 080 1951945874 97800.00   0.00   0.00   0.00 CA MINDSET/ AE Z5MVLB EMDS";
+        assert_eq!(extract_doc_type(line).unwrap(), "EMD");
+        assert_eq!(extract_fop(line).unwrap(), "Cash");
+        assert_eq!(extract_sign(line).unwrap(), "Amal");
+    }
+
+    #[test]
+    fn test_extract_unstarred_full_refund_with_populated_amounts() {
+        let line = "012882 080 1951945874 97800.00   0.00   0.00   0.00 CA MINDSET/ AE Z5MVLB RFND";
+        assert_eq!(extract_doc_type(line).unwrap(), "Refund");
+        assert_eq!(extract_fop(line).unwrap(), "Cash");
+        assert_eq!(extract_sign(line).unwrap(), "Amal");
+        assert_eq!(extract_total(line).unwrap(), "97800.00");
+    }
+
+    #[test]
+    fn test_extract_fop_and_sign_with_truncated_name() {
+        let line =
+            "012882 077 1951947994  24411.00   0.00   0.00   0.00 CA NABASIRY SH 8TPILL EMDS";
+        assert_eq!(extract_fop(line).unwrap(), "Cash");
+        assert_eq!(extract_sign(line).unwrap(), "Saeed");
     }
 
     #[test]

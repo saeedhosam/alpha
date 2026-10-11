@@ -29,19 +29,23 @@ async fn send_command(
     let selector = "[id$=\"_cmd_shellbridge_shellWindow_top_left_modeString_cmdPromptInput\"]";
     let mut visible_input: Option<(Element, String)> = None;
     for candidate in page.find_elements(selector).await? {
-        let bounds = candidate.bounding_box().await?;
+        let Ok(bounds) = candidate.bounding_box().await else {
+            continue;
+        };
         if bounds.width > 0.0 && bounds.height > 0.0 {
-            let id = candidate
+            let Some(id) = candidate
                 .property("id")
-                .await?
+                .await
+                .ok()
+                .flatten()
                 .and_then(|value| value.as_str().map(str::to_owned))
-                .ok_or("Command input has no id")?;
-            let prefix = id
-                .strip_suffix("_cmdPromptInput")
-                .ok_or("Unexpected command input id")?;
-            let response_selector = format!(
-                "#{prefix}_currentCommand .command .cmdResponse"
-            );
+            else {
+                continue;
+            };
+            let Some(prefix) = id.strip_suffix("_cmdPromptInput") else {
+                continue;
+            };
+            let response_selector = format!("#{prefix}_currentCommand .command .cmdResponse");
             visible_input = Some((candidate, response_selector));
             break;
         }
