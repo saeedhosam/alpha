@@ -8,10 +8,11 @@ use futures::StreamExt;
 use serde::Deserialize;
 
 use alpha::{
-    TicketCsvRow, extract_airline, extract_airline_code, extract_basic, extract_basic_from_twd,
-    extract_doc_type, extract_fop, extract_issue_date, extract_name_from_detail, extract_route,
-    extract_sign, extract_ticket_key, extract_ticket_no, extract_total, extract_tour_code,
-    format_csv_row, has_more_pages, parse_tjq_data_lines, route_to_cities,
+    TicketCsvRow, build_tjq_only_row, extract_airline, extract_airline_code, extract_basic,
+    extract_basic_from_twd, extract_doc_type, extract_fop, extract_issue_date,
+    extract_name_from_detail, extract_route, extract_sign, extract_ticket_key, extract_ticket_no,
+    extract_total, extract_tour_code, format_csv_row, has_more_pages, is_not_authorised,
+    parse_tjq_data_lines, route_to_cities,
 };
 
 #[derive(Debug, Deserialize)]
@@ -80,6 +81,40 @@ async fn wait_for_response(
         }
         tokio::time::sleep(Duration::from_millis(200)).await;
     }
+}
+
+async fn prompt_tjq_only(airline_code: &str, ticket_no: &str) -> bool {
+    let airline_code = airline_code.to_string();
+    let ticket_no = ticket_no.to_string();
+    tokio::task::spawn_blocking(move || {
+        use std::io::{self, Write};
+
+        loop {
+            println!(
+                "    NP ETKT: NOT AUTHORISED for {}-{}",
+                airline_code, ticket_no
+            );
+            println!(
+                "      [1] Enter only the information visible in the TJQ for this transaction"
+            );
+            println!("      [2] Do not enter it");
+            print!("    Choose (1/2): ");
+            let _ = io::stdout().flush();
+
+            let mut input = String::new();
+            match io::stdin().read_line(&mut input) {
+                Ok(0) => return false,
+                Ok(_) => match input.trim() {
+                    "1" => return true,
+                    "2" => return false,
+                    _ => println!("    Please enter 1 or 2."),
+                },
+                Err(_) => return false,
+            }
+        }
+    })
+    .await
+    .unwrap_or(false)
 }
 
 #[tokio::main]
@@ -178,37 +213,49 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         let is_emd = doc_type == "EMD";
 
-        let row = TicketCsvRow {
-            airline: extract_airline(tjq_line)?,
-            ticket_no,
-            doc_type,
-            name: extract_name_from_detail(&detail_response)?,
-            issue_date: extract_issue_date(&date),
-            route: if is_emd {
-                String::new()
-            } else {
-                route_to_cities(&extract_route(&detail_response).unwrap_or_default())
-            },
-            tour_code: if is_emd {
-                String::new()
-            } else {
-                extract_tour_code(&detail_response).unwrap_or_default()
-            },
-            basic: if is_void {
-                "0.00".to_string()
-            } else if is_emd {
-                extract_total(tjq_line)?
-            } else {
-                extract_basic_from_twd(&detail_response)
-                    .unwrap_or_else(|_| extract_basic(tjq_line).unwrap_or_default())
-            },
-            total: if is_void {
-                "0.00".to_string()
-            } else {
-                extract_total(tjq_line)?
-            },
-            fop: extract_fop(tjq_line)?,
-            sign: extract_sign(tjq_line)?,
+        let row = if is_not_authorised(&detail_response) {
+            if !prompt_tjq_only(&airline_code, &ticket_no).await {
+                println!("    Skipping {}-{}", airline_code, ticket_no);
+                continue;
+            }
+            println!(
+                "    Using TJQ-only information for {}-{}",
+                airline_code, ticket_no
+            );
+            build_tjq_only_row(tjq_line, &ticket_no, &doc_type, &date)?
+        } else {
+            TicketCsvRow {
+                airline: extract_airline(tjq_line)?,
+                ticket_no,
+                doc_type,
+                name: extract_name_from_detail(&detail_response)?,
+                issue_date: extract_issue_date(&date),
+                route: if is_emd {
+                    String::new()
+                } else {
+                    route_to_cities(&extract_route(&detail_response).unwrap_or_default())
+                },
+                tour_code: if is_emd {
+                    String::new()
+                } else {
+                    extract_tour_code(&detail_response).unwrap_or_default()
+                },
+                basic: if is_void {
+                    "0.00".to_string()
+                } else if is_emd {
+                    extract_total(tjq_line)?
+                } else {
+                    extract_basic_from_twd(&detail_response)
+                        .unwrap_or_else(|_| extract_basic(tjq_line).unwrap_or_default())
+                },
+                total: if is_void {
+                    "0.00".to_string()
+                } else {
+                    extract_total(tjq_line)?
+                },
+                fop: extract_fop(tjq_line)?,
+                sign: extract_sign(tjq_line)?,
+            }
         };
         csv_lines.push(format_csv_row(&row));
     }

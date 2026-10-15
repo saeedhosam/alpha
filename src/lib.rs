@@ -493,6 +493,12 @@ pub fn extract_ticket_key(line: &str) -> Result<String, ExtractError> {
     Ok(format!("{}:{}", code, ticket))
 }
 
+pub fn is_not_authorised(response: &str) -> bool {
+    response
+        .to_ascii_uppercase()
+        .contains("NP ETKT: NOT AUTHORISED")
+}
+
 pub fn has_more_pages(response: &str) -> bool {
     response
         .lines()
@@ -516,6 +522,39 @@ pub struct TicketCsvRow {
     pub total: String,
     pub fop: String,
     pub sign: String,
+}
+
+pub fn build_tjq_only_row(
+    line: &str,
+    ticket_no: &str,
+    doc_type: &str,
+    issue_date: &str,
+) -> Result<TicketCsvRow, ExtractError> {
+    let is_void = doc_type == "Void";
+    let is_emd = doc_type == "EMD";
+    Ok(TicketCsvRow {
+        airline: extract_airline(line)?,
+        ticket_no: ticket_no.to_string(),
+        doc_type: doc_type.to_string(),
+        name: extract_name(line).unwrap_or_default(),
+        issue_date: extract_issue_date(issue_date),
+        route: String::new(),
+        tour_code: String::new(),
+        basic: if is_void {
+            "0.00".to_string()
+        } else if is_emd {
+            extract_total(line)?
+        } else {
+            extract_basic(line).unwrap_or_default()
+        },
+        total: if is_void {
+            "0.00".to_string()
+        } else {
+            extract_total(line)?
+        },
+        fop: extract_fop(line)?,
+        sign: extract_sign(line)?,
+    })
 }
 
 pub fn format_csv_row(row: &TicketCsvRow) -> String {
@@ -1029,5 +1068,41 @@ mod tests {
     fn test_route_not_found() {
         let resp = "NO ITINERARY DATA\n";
         assert!(extract_route(resp).is_err());
+    }
+
+    #[test]
+    fn test_is_not_authorised() {
+        assert!(is_not_authorised("NP ETKT: NOT AUTHORISED"));
+        assert!(is_not_authorised(
+            "ERROR\nnp etkt: not authorised\nNO ACTION TAKEN"
+        ));
+        assert!(!is_not_authorised("TICKET NUMBER NOT FOUND"));
+        assert!(!is_not_authorised(""));
+    }
+
+    #[test]
+    fn test_build_tjq_only_row() {
+        let row = build_tjq_only_row(TJQ_XA, "6901233301", "Reissue", "19jul").unwrap();
+        assert_eq!(row.airline, "MS");
+        assert_eq!(row.ticket_no, "6901233301");
+        assert_eq!(row.doc_type, "Reissue");
+        assert_eq!(row.name, "HANNA/SA");
+        assert_eq!(row.issue_date, "19JUL");
+        assert_eq!(row.route, "");
+        assert_eq!(row.tour_code, "");
+        assert_eq!(row.basic, "1458.00");
+        assert_eq!(row.total, "2339.00");
+        assert_eq!(row.fop, "Cash");
+        assert_eq!(row.sign, "Amira");
+    }
+
+    #[test]
+    fn test_build_tjq_only_row_void() {
+        let line =
+            "012635*077 1951947181      0.00   0.00   0.00   0.00    ABOUELDA SH 8TPILL CANX";
+        let row = build_tjq_only_row(line, "1951947181", "Void", "19jul").unwrap();
+        assert_eq!(row.basic, "0.00");
+        assert_eq!(row.total, "0.00");
+        assert_eq!(row.sign, "Saeed");
     }
 }
